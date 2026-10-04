@@ -28,22 +28,22 @@ local memory = {}
 
 local SEED = {
   { title = "Buy groceries", done = false, priority = "high", due = "2026-10-06",
-    created = "2026-10-01", description = "Milk, eggs, bread and reactor coolant snacks." },
+    created = "2026-10-01", responsible = "Alex", description = "Milk, eggs, bread and reactor coolant snacks." },
   { title = "Write documentation", done = true, priority = "normal", due = "2026-10-03",
-    created = "2026-09-28", description = "Document the store backend interface and the PocketBase plan." },
+    created = "2026-09-28", responsible = "Alex", description = "Document the store backend interface and the PocketBase plan." },
   { title = "Pay the reactor bill", done = false, priority = "high", due = "2026-10-15",
-    created = "2026-10-02", description = "Overdue bills shut the reactor down. Do not let that happen." },
+    created = "2026-10-02", responsible = "Steve", description = "Overdue bills shut the reactor down. Do not let that happen." },
   { title = "Refuel the reactor", done = false, priority = "low", due = "2026-10-20",
-    created = "2026-10-02", description = "Two uranium rods should be enough for the next cycle." },
+    created = "2026-10-02", responsible = "Unassigned", description = "Two uranium rods should be enough for the next cycle." },
   { title = "Call Steve", done = true, priority = "normal", due = "-",
-    created = "2026-09-30", description = "Ask Steve about the redstone wiring." },
+    created = "2026-09-30", responsible = "Steve", description = "Ask Steve about the redstone wiring." },
 }
 
 function memory.copy(t)
   return {
     id = t.id, title = t.title, done = t.done,
     description = t.description, priority = t.priority,
-    due = t.due, created = t.created,
+    due = t.due, created = t.created, responsible = t.responsible,
   }
 end
 
@@ -65,6 +65,7 @@ function memory:insert(fields)
     priority = fields.priority or "normal",
     due = fields.due or "-",
     created = fields.created or "-",
+    responsible = fields.responsible or "Unassigned",
   }
   self.todos[#self.todos + 1] = todo
   return memory.copy(todo)
@@ -283,7 +284,11 @@ end
 
 function App:toggleDetail()
   local todo = self:detailTodo()
-  if todo then self.store:setDone(todo.id, not todo.done) end
+  if todo then
+    local done = not todo.done
+    self.store:setDone(todo.id, done)
+    self:setMessage(done and "marked done" or "marked open", ui.theme.mutedFg)
+  end
 end
 
 function App:deleteDetail()
@@ -362,8 +367,9 @@ function App:listView()
       end
       local number = string.format("%" .. numberWidth .. "d. ", index)
       local box = multi and (item.done and "[x] " or "[ ] ") or ""
+      local marker = (item.done and not multi) and " [done]" or ""
       local head = "  " .. number .. box
-      local text = head .. self:truncate(item.title, width - #head)
+      local text = head .. self:truncate(item.title .. marker, width - #head)
       return { text = text, fg = fg, bg = bg }
     end,
     onItemClick = function(_, index)
@@ -382,15 +388,17 @@ function App:detailsView()
   local width = self.canvas.width
   local w = width - 4
   local function field(label, value, fg)
-    return ui.text(string.format("   %-11s%s", label, self:truncate(tostring(value), w - 11)),
+    return ui.text(string.format("   %-12s %s", label, self:truncate(tostring(value), w - 13)),
       { style = { fg = fg or ui.theme.fg } })
   end
   local children = {
-    ui.text(" " .. self:truncate(todo.title, width - 1),
-      { style = { fg = ui.theme.accentFg, bg = ui.theme.accentBg } }),
+    ui.text(" " .. self:truncate(todo.title, width - 1 - (todo.done and 7 or 0))
+      .. (todo.done and "  [DONE]" or ""),
+      { style = { fg = ui.theme.accentFg, bg = todo.done and ui.theme.okBg or ui.theme.accentBg } }),
     ui.spacer({ h = 1 }),
-    field("Status:", todo.done and "done" or "open", todo.done and ui.theme.mutedFg or ui.theme.fg),
+    field("Status:", todo.done and "done" or "open", todo.done and ui.theme.okFg or ui.theme.fg),
     field("Priority:", todo.priority),
+    field("Responsible:", todo.responsible),
     field("Due:", todo.due),
     field("Created:", todo.created),
     field("ID:", todo.id),
@@ -434,10 +442,12 @@ function App:listButtons()
 end
 
 function App:detailButtons()
+  local todo = self:detailTodo()
+  local done = todo and todo.done
   return ui.row({
     ui.spacer({ w = 1 }),
     ui.button("Back", { onClick = function() self:closeDetails() end }),
-    ui.button("Complete", { onClick = function() self:toggleDetail() end }),
+    ui.button(done and "Reopen" or "Complete", { onClick = function() self:toggleDetail() end }),
     ui.button("Delete", { onClick = function() self:deleteDetail() end }),
     ui.button("Quit", { onClick = function() self.running = false end }),
   }, { gap = 2 })
