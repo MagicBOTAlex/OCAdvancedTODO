@@ -58,6 +58,20 @@ ui.layout(listTree, 10, 3)
 ui.dispatch(listTree, { "touch", "screen", 1, 2, 0 })
 check("list click resolves item index", picked == 2)
 
+-- container backgrounds prevent stale cells leaking between views
+local repaint = ui.buffer(10, 1)
+ui.draw(repaint, ui.layout(ui.column({ ui.text("AAAAAAAAAA") }), 10, 1))
+ui.draw(repaint, ui.layout(ui.column({ ui.text("BB") }), 10, 1))
+check("container repaints background over old content", repaint:row(1) == "BB        ")
+
+-- fills never write past the canvas edge (which would wrap on real hardware)
+local edge = ui.buffer(10, 1)
+edge:fill(8, 1, "ABCDE", 0xFFFFFF, 0x000000)
+check("fill clips at the right edge", edge:row(1) == "       ABC")
+local offscreen = ui.buffer(5, 1)
+offscreen:fill(9, 1, "XX", 0xFFFFFF, 0x000000)
+check("fill ignores out-of-bounds x", offscreen:row(1) == "     ")
+
 -- checked checkbox renders a filled box
 local checkbox = ui.checkbox("Done", true)
 local checkboxCanvas = ui.buffer(12, 1)

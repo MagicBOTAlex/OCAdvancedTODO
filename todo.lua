@@ -87,9 +87,23 @@ function ui.buffer(width, height)
 end
 
 function Canvas:fill(x, y, text, fg, bg, width)
+  if y < 1 or y > self.height then return end
   width = width or (self.width - x + 1)
+  if width <= 0 then return end
   fg = fg or ui.theme.fg
   bg = bg or ui.theme.bg
+  text = tostring(text or "")
+  -- Trim anything off the left edge, then clamp to the right edge so a long
+  -- node can never make the GPU wrap onto the next line.
+  if x < 1 then
+    local drop = 1 - x
+    text = text:sub(drop + 1)
+    width = width - drop
+    x = 1
+  end
+  local max_width = self.width - x + 1
+  if width <= 0 or max_width <= 0 then return end
+  if width > max_width then width = max_width end
   text = clip_text(text, width)
   if self.gpu then
     self.gpu.setForeground(fg)
@@ -98,10 +112,8 @@ function Canvas:fill(x, y, text, fg, bg, width)
   else
     for i = 1, width do
       local cx = x + i - 1
-      if cx >= 1 and cx <= self.width and y >= 1 and y <= self.height then
-        local ch = i <= #text and text:sub(i, i) or " "
-        self.cells[y][cx] = { ch, fg, bg }
-      end
+      local ch = i <= #text and text:sub(i, i) or " "
+      self.cells[y][cx] = { ch, fg, bg }
     end
   end
 end
@@ -265,6 +277,12 @@ end
 local function draw_node(canvas, node)
   local kind = node.kind
   if kind == "column" or kind == "row" then
+    -- Paint the container background first so stale cells from a previous
+    -- view can never leak through gaps between children.
+    local _, bg = fg_bg(node)
+    for row = 0, node.h - 1 do
+      canvas:fill(node.x, node.y + row, "", ui.theme.fg, bg, node.w)
+    end
     for _, child in ipairs(node.children) do
       draw_node(canvas, child)
     end
@@ -759,6 +777,7 @@ function App:listView()
   self:clampSelection(#todos)
   local multi = self.multi
   local width = self.canvas.width
+  local numberWidth = #tostring(math.max(#todos, 1))
   return ui.list({
     grow = true,
     items = todos,
@@ -769,9 +788,10 @@ function App:listView()
       if index == self.selected and self.keyboard then
         fg, bg = ui.theme.selectFg, ui.theme.selectBg
       end
-      local indent = multi and "  " or "    "
-      local prefix = multi and (item.done and "[x] " or "[ ] ") or "  "
-      local text = indent .. prefix .. self:truncate(item.title, width - #indent - #prefix)
+      local number = string.format("%" .. numberWidth .. "d. ", index)
+      local box = multi and (item.done and "[x] " or "[ ] ") or ""
+      local head = "  " .. number .. box
+      local text = head .. self:truncate(item.title, width - #head)
       return { text = text, fg = fg, bg = bg }
     end,
     onItemClick = function(_, index)
@@ -826,7 +846,10 @@ function App:statusView()
       msg = "click a task to open details"
     end
   end
-  return ui.text(" " .. (msg or ""), { style = { fg = fg } })
+  local text = ui.text(" " .. (msg or ""), { grow = true, style = { fg = fg } })
+  local toggle = ui.checkbox("Completed", self.showDone,
+    { onClick = function() self:toggleShowDone() end })
+  return ui.row({ text, toggle }, { gap = 1 })
 end
 
 function App:listButtons()
@@ -835,7 +858,6 @@ function App:listButtons()
     ui.button("Add", { onClick = function() self:beginAdd() end }),
     ui.button(self.multi and "Select:on" or "Select", { onClick = function() self:toggleMulti() end }),
     ui.button("Quit", { onClick = function() self.running = false end }),
-    ui.checkbox("Completed", self.showDone, { onClick = function() self:toggleShowDone() end }),
   }, { gap = 2 })
 end
 

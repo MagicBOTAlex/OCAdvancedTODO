@@ -87,9 +87,23 @@ function ui.buffer(width, height)
 end
 
 function Canvas:fill(x, y, text, fg, bg, width)
+  if y < 1 or y > self.height then return end
   width = width or (self.width - x + 1)
+  if width <= 0 then return end
   fg = fg or ui.theme.fg
   bg = bg or ui.theme.bg
+  text = tostring(text or "")
+  -- Trim anything off the left edge, then clamp to the right edge so a long
+  -- node can never make the GPU wrap onto the next line.
+  if x < 1 then
+    local drop = 1 - x
+    text = text:sub(drop + 1)
+    width = width - drop
+    x = 1
+  end
+  local max_width = self.width - x + 1
+  if width <= 0 or max_width <= 0 then return end
+  if width > max_width then width = max_width end
   text = clip_text(text, width)
   if self.gpu then
     self.gpu.setForeground(fg)
@@ -98,10 +112,8 @@ function Canvas:fill(x, y, text, fg, bg, width)
   else
     for i = 1, width do
       local cx = x + i - 1
-      if cx >= 1 and cx <= self.width and y >= 1 and y <= self.height then
-        local ch = i <= #text and text:sub(i, i) or " "
-        self.cells[y][cx] = { ch, fg, bg }
-      end
+      local ch = i <= #text and text:sub(i, i) or " "
+      self.cells[y][cx] = { ch, fg, bg }
     end
   end
 end
@@ -265,6 +277,12 @@ end
 local function draw_node(canvas, node)
   local kind = node.kind
   if kind == "column" or kind == "row" then
+    -- Paint the container background first so stale cells from a previous
+    -- view can never leak through gaps between children.
+    local _, bg = fg_bg(node)
+    for row = 0, node.h - 1 do
+      canvas:fill(node.x, node.y + row, "", ui.theme.fg, bg, node.w)
+    end
     for _, child in ipairs(node.children) do
       draw_node(canvas, child)
     end
@@ -467,6 +485,20 @@ local listTree = ui.column({ list })
 ui.layout(listTree, 10, 3)
 ui.dispatch(listTree, { "touch", "screen", 1, 2, 0 })
 check("list click resolves item index", picked == 2)
+
+-- container backgrounds prevent stale cells leaking between views
+local repaint = ui.buffer(10, 1)
+ui.draw(repaint, ui.layout(ui.column({ ui.text("AAAAAAAAAA") }), 10, 1))
+ui.draw(repaint, ui.layout(ui.column({ ui.text("BB") }), 10, 1))
+check("container repaints background over old content", repaint:row(1) == "BB        ")
+
+-- fills never write past the canvas edge (which would wrap on real hardware)
+local edge = ui.buffer(10, 1)
+edge:fill(8, 1, "ABCDE", 0xFFFFFF, 0x000000)
+check("fill clips at the right edge", edge:row(1) == "       ABC")
+local offscreen = ui.buffer(5, 1)
+offscreen:fill(9, 1, "XX", 0xFFFFFF, 0x000000)
+check("fill ignores out-of-bounds x", offscreen:row(1) == "     ")
 
 -- checked checkbox renders a filled box
 local checkbox = ui.checkbox("Done", true)

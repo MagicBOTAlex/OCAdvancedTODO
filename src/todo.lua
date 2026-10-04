@@ -349,6 +349,7 @@ function App:listView()
   self:clampSelection(#todos)
   local multi = self.multi
   local width = self.canvas.width
+  local numberWidth = #tostring(math.max(#todos, 1))
   return ui.list({
     grow = true,
     items = todos,
@@ -359,9 +360,10 @@ function App:listView()
       if index == self.selected and self.keyboard then
         fg, bg = ui.theme.selectFg, ui.theme.selectBg
       end
-      local indent = multi and "  " or "    "
-      local prefix = multi and (item.done and "[x] " or "[ ] ") or "  "
-      local text = indent .. prefix .. self:truncate(item.title, width - #indent - #prefix)
+      local number = string.format("%" .. numberWidth .. "d. ", index)
+      local box = multi and (item.done and "[x] " or "[ ] ") or ""
+      local head = "  " .. number .. box
+      local text = head .. self:truncate(item.title, width - #head)
       return { text = text, fg = fg, bg = bg }
     end,
     onItemClick = function(_, index)
@@ -416,7 +418,10 @@ function App:statusView()
       msg = "click a task to open details"
     end
   end
-  return ui.text(" " .. (msg or ""), { style = { fg = fg } })
+  local text = ui.text(" " .. (msg or ""), { grow = true, style = { fg = fg } })
+  local toggle = ui.checkbox("Completed", self.showDone,
+    { onClick = function() self:toggleShowDone() end })
+  return ui.row({ text, toggle }, { gap = 1 })
 end
 
 function App:listButtons()
@@ -425,7 +430,6 @@ function App:listButtons()
     ui.button("Add", { onClick = function() self:beginAdd() end }),
     ui.button(self.multi and "Select:on" or "Select", { onClick = function() self:toggleMulti() end }),
     ui.button("Quit", { onClick = function() self.running = false end }),
-    ui.checkbox("Completed", self.showDone, { onClick = function() self:toggleShowDone() end }),
   }, { gap = 2 })
 end
 
