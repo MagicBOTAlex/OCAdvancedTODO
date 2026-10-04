@@ -8,8 +8,8 @@ cpu:
 gpu:
   tier: 3
   screen:
-    width: 80
-    height: 25
+    width: 60
+    height: 30
     maxDepth: 8
 
 components:
@@ -20,6 +20,7 @@ internet:
   enabled: true
 
 run:
+  script: todo.lua       # boot straight into the todo list
   interactive: true
   terminateDelay: 5
 
@@ -27,6 +28,3 @@ filesystems:
   - label: openos
     path: builtin
     mount: /
-  - label: app
-    path: .
-    mount: /app

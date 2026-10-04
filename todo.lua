@@ -6,10 +6,16 @@
 --
 -- Controls
 --   up / down, wheel      move the selection
---   space / enter / click toggle the clicked/selected todo
+--   space / click         toggle the selected / clicked todo
+--   enter (or [ Details ]) show details for the selected todo
 --   a  (or [ Add ])       add a todo (type the title, enter to save, esc to cancel)
 --   d  (or [ Delete ])    delete the selected todo
 --   click [ Quit ] / q    leave the program
+--
+-- In the details view: enter/esc return to the list, space toggles, d deletes.
+--
+-- To start it automatically on boot (in-game), add to /home/.shrc:
+--   dofile("/home/todo.lua")
 --
 -- Currently backed by dummy in-memory data. The `Store`/backends section below
 -- is the seam where a PocketBase backend will plug in via the `internet`
@@ -27,7 +33,8 @@ local args = { ... }
 -- ===========================================================================
 -- A backend implements:
 --   name()            -> string
---   list()            -> array of { id, title, done }
+--   list()            -> array of
+--                        { id, title, done, description, priority, due, created }
 --   add(title)        -> todo
 --   setDone(id, b)    -> todo
 --   remove(id)        -> boolean
@@ -38,20 +45,47 @@ Store.__index = Store
 local memory = {}
 
 local SEED = {
-  { title = "Buy groceries", done = false },
-  { title = "Write documentation", done = true },
-  { title = "Pay the reactor bill", done = false },
-  { title = "Refuel the reactor", done = false },
-  { title = "Call Steve", done = true },
+  { title = "Buy groceries", done = false, priority = "high", due = "2026-10-06",
+    created = "2026-10-01", description = "Milk, eggs, bread and reactor coolant snacks." },
+  { title = "Write documentation", done = true, priority = "normal", due = "2026-10-03",
+    created = "2026-09-28", description = "Document the store backend interface and the PocketBase plan." },
+  { title = "Pay the reactor bill", done = false, priority = "high", due = "2026-10-15",
+    created = "2026-10-02", description = "Overdue bills shut the reactor down. Do not let that happen." },
+  { title = "Refuel the reactor", done = false, priority = "low", due = "2026-10-20",
+    created = "2026-10-02", description = "Two uranium rods should be enough for the next cycle." },
+  { title = "Call Steve", done = true, priority = "normal", due = "-",
+    created = "2026-09-30", description = "Ask Steve about the redstone wiring." },
 }
+
+function memory.copy(t)
+  return {
+    id = t.id, title = t.title, done = t.done,
+    description = t.description, priority = t.priority,
+    due = t.due, created = t.created,
+  }
+end
 
 function memory.new(seed)
   local self = setmetatable({ todos = {}, seq = 0 }, { __index = memory })
   for _, item in ipairs(seed or SEED) do
-    local todo = self:add(item.title)
-    self:setDone(todo.id, item.done)
+    self:insert(item)
   end
   return self
+end
+
+function memory:insert(fields)
+  self.seq = self.seq + 1
+  local todo = {
+    id = "t" .. self.seq,
+    title = tostring(fields.title or ""),
+    done = fields.done and true or false,
+    description = fields.description or "",
+    priority = fields.priority or "normal",
+    due = fields.due or "-",
+    created = fields.created or "-",
+  }
+  self.todos[#self.todos + 1] = todo
+  return memory.copy(todo)
 end
 
 function memory:name() return "memory (dummy data)" end
@@ -59,7 +93,7 @@ function memory:name() return "memory (dummy data)" end
 function memory:list()
   local out = {}
   for i, t in ipairs(self.todos) do
-    out[i] = { id = t.id, title = t.title, done = t.done }
+    out[i] = memory.copy(t)
   end
   return out
 end
@@ -67,17 +101,14 @@ end
 function memory:add(title)
   title = tostring(title or "")
   if title == "" then error("cannot add an empty todo", 2) end
-  self.seq = self.seq + 1
-  local todo = { id = "t" .. self.seq, title = title, done = false }
-  self.todos[#self.todos + 1] = todo
-  return { id = todo.id, title = todo.title, done = todo.done }
+  return self:insert({ title = title })
 end
 
 function memory:setDone(id, done)
   for _, t in ipairs(self.todos) do
     if t.id == id then
       t.done = done and true or false
-      return { id = t.id, title = t.title, done = t.done }
+      return memory.copy(t)
     end
   end
   return nil
@@ -167,6 +198,8 @@ function UI.new(store, opts)
     adding = false,
     buffer = {},
     buttons = {},
+    view = "list",
+    detailId = nil,
   }, UI)
 end
 
@@ -238,6 +271,72 @@ function UI:drawList()
   end
 end
 
+function UI:wrap(text, width)
+  local lines = {}
+  for paragraph in tostring(text):gmatch("[^\n]+") do
+    local line = ""
+    for word in paragraph:gmatch("%S+") do
+      if line == "" then
+        line = word
+      elseif #line + 1 + #word <= width then
+        line = line .. " " .. word
+      else
+        lines[#lines + 1] = line
+        line = word
+      end
+    end
+    lines[#lines + 1] = line
+  end
+  if #lines == 0 then lines[1] = "" end
+  return lines
+end
+
+function UI:detailTodo()
+  local list = self.store:list()
+  for _, t in ipairs(list) do
+    if t.id == self.detailId then return t end
+  end
+  return list[self.selected]
+end
+
+function UI:drawDetails()
+  local top, bottom = self:sidebarTop(), self:sidebarBottom()
+  for y = top, bottom do self:fill(1, y, "", FG, BG) end
+
+  local todo = self:detailTodo()
+  if not todo then
+    self.view = "list"
+    return
+  end
+
+  local x, w = 3, self.width - 4
+  self:fill(x, top, self:truncate(todo.title, w), ACCENT_FG, ACCENT_BG, w)
+
+  local y = top + 2
+  local function field(label, value, fg)
+    if y > bottom then return end
+    self:fill(x, y, label, LINE_FG, BG)
+    self:fill(x + 11, y, self:truncate(tostring(value), w - 11), fg or FG, BG)
+    y = y + 1
+  end
+  field("Status:", todo.done and "done" or "open", todo.done and DONE_FG or FG)
+  field("Priority:", todo.priority)
+  field("Due:", todo.due)
+  field("Created:", todo.created)
+  field("ID:", todo.id)
+
+  y = y + 1
+  if y <= bottom then
+    self:fill(x, y, "Description:", LINE_FG, BG)
+    y = y + 1
+  end
+  for _, line in ipairs(self:wrap(todo.description or "", w)) do
+    if y > bottom then break end
+    self:fill(x, y, line, FG, BG)
+    y = y + 1
+  end
+end
+
 function UI:drawStatus()
   local y = self.height - 3
   local msg, fg = self.message, self.messageColor
@@ -250,6 +349,7 @@ end
 
 function UI:drawHelp()
   local y = self.height - 1
+  self:fill(1, y, "", LINE_FG, BG)
   self.buttons = {}
   local x = 2
   local function button(label, action)
@@ -258,10 +358,19 @@ function UI:drawHelp()
     self.buttons[#self.buttons + 1] = { x1 = x, x2 = x + #text - 1, action = action }
     x = x + #text + 2
   end
-  button("Add", "add")
-  button("Delete", "delete")
-  button("Quit", "quit")
-  self:fill(x, y, "click a row to toggle, wheel to scroll", LINE_FG, BG)
+  if self.view == "details" then
+    button("Back", "back")
+    button("Toggle", "toggle")
+    button("Delete", "delete")
+    button("Quit", "quit")
+    self:fill(x, y, "enter/esc back, space toggle", LINE_FG, BG)
+  else
+    button("Add", "add")
+    button("Details", "details")
+    button("Delete", "delete")
+    button("Quit", "quit")
+    self:fill(x, y, "click row toggles, wheel scrolls", LINE_FG, BG)
+  end
 
   local counts = self:counts()
   self:fill(1, y + 1, string.format("  %d open / %d total", counts.open, counts.total), LINE_FG, BG)
@@ -276,7 +385,11 @@ end
 
 function UI:draw()
   self:drawHeader()
-  self:drawList()
+  if self.view == "details" then
+    self:drawDetails()
+  else
+    self:drawList()
+  end
   self:drawStatus()
   self:drawHelp()
 end
@@ -301,6 +414,29 @@ function UI:deleteSelected()
   if id then
     self.store:remove(id)
     self:setMessage("deleted todo")
+  end
+end
+
+function UI:openDetails()
+  self.detailId = self:currentId()
+  if self.detailId then self.view = "details" end
+end
+
+function UI:closeDetails()
+  self.view = "list"
+end
+
+function UI:toggleDetail()
+  local todo = self:detailTodo()
+  if todo then self.store:setDone(todo.id, not todo.done) end
+end
+
+function UI:deleteDetail()
+  local todo = self:detailTodo()
+  if todo then
+    self.store:remove(todo.id)
+    self:setMessage("deleted todo")
+    self.view = "list"
   end
 end
 
@@ -341,15 +477,36 @@ function UI:handleAddKey(char, code)
   end
 end
 
+function UI:handleDetailsKey(char, code)
+  if code == K.enter or code == 28 or code == 1 then
+    self:closeDetails()
+  elseif code == K.space or code == 57 then
+    self:toggleDetail()
+  elseif code == K.up or code == 200 then
+    self.selected = self.selected - 1
+    self.detailId = self:currentId()
+  elseif code == K.down or code == 208 then
+    self.selected = self.selected + 1
+    self.detailId = self:currentId()
+  elseif code == 0x20 or char == 100 then
+    self:deleteDetail()
+  elseif code == 0x10 or char == 113 then
+    self.running = false
+  end
+end
+
 function UI:handleKey(char, code)
   if self.adding then return self:handleAddKey(char, code) end
+  if self.view == "details" then return self:handleDetailsKey(char, code) end
 
   if code == K.up or code == 200 then
     self.selected = self.selected - 1
   elseif code == K.down or code == 208 then
     self.selected = self.selected + 1
-  elseif code == K.space or code == 57 or code == K.enter or code == 28 then
+  elseif code == K.space or code == 57 then
     self:toggleSelected()
+  elseif code == K.enter or code == 28 then
+    self:openDetails()
   elseif code == 0x1E or char == 97 then
     self:beginAdd()
   elseif code == 0x20 or char == 100 then
@@ -362,8 +519,14 @@ end
 function UI:invokeAction(action)
   if action == "add" then
     if self.adding then self:cancelAdd() else self:beginAdd() end
+  elseif action == "details" then
+    self:openDetails()
+  elseif action == "back" then
+    self:closeDetails()
+  elseif action == "toggle" then
+    if self.view == "details" then self:toggleDetail() else self:toggleSelected() end
   elseif action == "delete" then
-    self:deleteSelected()
+    if self.view == "details" then self:deleteDetail() else self:deleteSelected() end
   elseif action == "quit" then
     self.running = false
   end
@@ -382,7 +545,7 @@ function UI:handleTouch(x, y, button)
     return
   end
 
-  if self.adding then return end
+  if self.adding or self.view == "details" then return end
 
   local top, bottom = self:sidebarTop(), self:sidebarBottom()
   if y >= top and y <= bottom then
@@ -399,6 +562,9 @@ function UI:handleScroll(_, _, delta)
     self.selected = self.selected - 1
   elseif delta < 0 then
     self.selected = self.selected + 1
+  end
+  if self.view == "details" then
+    self.detailId = self:currentId()
   end
 end
 
@@ -432,11 +598,14 @@ local function runSelfTest()
   local function key(c, code) return { "key_down", "keyboard", c or 0, code or 0, "player" } end
   local function touch(x, y) return { "touch", "screen", x, y, 0 } end
   local queue = {
-    touch(5, 3),                                   -- click first row: toggle done
-    { "scroll", "screen", 5, 3, -1 },              -- wheel down
+    touch(5, 3),                                   -- click first row: toggle done (open -> done)
+    { "scroll", "screen", 5, 3, -1 },              -- wheel down: select row 2
+    key(0, 28),                                    -- enter: open details for row 2
+    key(0, 57),                                    -- space: toggle it in the details view (done -> open)
+    key(0, 1),                                     -- esc: back to the list
     key(97, 30), key(78), key(101), key(119), key(32), key(116), -- a + "New t"
-    key(0, 28),                                    -- enter
-    touch(25, 24),                                 -- Quit button
+    key(0, 28),                                    -- enter: commit add
+    touch(39, 24),                                 -- Quit button ([ Quit ] sits around x 36..43)
   }
   local function input()
     local item = table.remove(queue, 1)
@@ -452,9 +621,10 @@ local function runSelfTest()
   local open = 0
   for _, t in ipairs(todos) do if not t.done then open = open + 1 end end
 
-  local ok = #todos == 6 and open == 3 and todos[1] and todos[1].done and todos[2] and todos[2].done
+  local ok = #todos == 6 and open == 4 and todos[1] and todos[1].done and todos[2] and not todos[2].done
   print(ok and "PASS: todo self-test" or "SELF-TEST FAILED")
-  print(string.format("  total=%d open=%d firstDone=%s", #todos, open, tostring(todos[1] and todos[1].done)))
+  print(string.format("  total=%d open=%d firstDone=%s secondDone=%s",
+    #todos, open, tostring(todos[1] and todos[1].done), tostring(todos[2] and todos[2].done)))
   return ok
 end
 
