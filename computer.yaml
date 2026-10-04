@@ -1,0 +1,32 @@
+name: oc-advanced-todo
+
+memory: 512
+
+cpu:
+  tier: 2
+
+gpu:
+  tier: 3
+  screen:
+    width: 80
+    height: 25
+    maxDepth: 8
+
+components:
+  keyboard: true
+  mouse: true
+
+internet:
+  enabled: true
+
+run:
+  interactive: true
+  terminateDelay: 5
+
+filesystems:
+  - label: openos
+    path: builtin
+    mount: /
+  - label: app
+    path: .
+    mount: /app

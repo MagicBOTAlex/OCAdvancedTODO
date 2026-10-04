@@ -1,0 +1,28 @@
+name: oc-advanced-todo-test
+
+memory: 512
+
+cpu:
+  tier: 2
+
+gpu:
+  tier: 3
+  screen:
+    width: 80
+    height: 25
+    maxDepth: 8
+
+components:
+  keyboard: true
+
+run:
+  interactive: false
+  terminateDelay: 0
+
+filesystems:
+  - label: openos
+    path: builtin
+    mount: /
+  - label: app
+    path: .
+    mount: /app
