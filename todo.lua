@@ -4,15 +4,19 @@
 -- Copy this single file to your computer and run it (e.g. `todo`, `todo.lua`,
 -- or `/home/todo.lua`).
 --
--- Controls
---   up / down, wheel      move the selection
---   space / click         toggle the selected / clicked todo
---   enter (or [ Details ]) show details for the selected todo
---   a  (or [ Add ])       add a todo (type the title, enter to save, esc to cancel)
---   d  (or [ Delete ])    delete the selected todo
---   click [ Quit ] / q    leave the program
+-- Controls (in-game: pointer/touch only)
+--   click a task          open its details (or complete it in select mode)
+--   click [ Add ]         add a todo
+--   click [ Select ]      toggle select mode (checkboxes) for completing tasks
+--   click [ ] Completed   show / hide completed todos
+--   click [ Quit ]        leave the program
+--   wheel / drag          scroll the list
 --
--- In the details view: enter/esc return to the list, space toggles, d deletes.
+-- There is no keyboard in-game: row selection and key handling are disabled by
+-- default. Pass keyboard = true to UI.new (as --self-test does) to exercise the
+-- selected-task keyboard path during development.
+--
+-- Completed todos are collapsed by default.
 --
 -- To start it automatically on boot (in-game), add to /home/.shrc:
 --   dofile("/home/todo.lua")
@@ -200,6 +204,9 @@ function UI.new(store, opts)
     buttons = {},
     view = "list",
     detailId = nil,
+    multi = false,
+    showDone = false,
+    keyboard = opts.keyboard and true or false,
   }, UI)
 end
 
@@ -239,9 +246,21 @@ function UI:drawHeader()
   self:fill(1, 2, string.rep("-", self.width), LINE_FG, BG)
 end
 
+-- The rows shown in the list: open todos only, unless completed ones are
+-- expanded. Selection indices always refer to this filtered list.
+function UI:visible()
+  local all = self.store:list()
+  if self.showDone then return all end
+  local out = {}
+  for _, t in ipairs(all) do
+    if not t.done then out[#out + 1] = t end
+  end
+  return out
+end
+
 function UI:drawList()
   local top, bottom = self:sidebarTop(), self:sidebarBottom()
-  local todos = self.store:list()
+  local todos = self:visible()
   local visible = bottom - top + 1
 
   if self.selected > #todos then self.selected = #todos end
@@ -261,12 +280,16 @@ function UI:drawList()
       local idx = self.offset + row
       local fg = todo.done and DONE_FG or FG
       local bg = BG
-      if idx == self.selected then
+      if idx == self.selected and self.keyboard then
         fg = SELECT_FG
         bg = SELECT_BG
       end
-      local box = todo.done and "[x] " or "[ ] "
-      self:fill(1, y, "  " .. box .. self:truncate(todo.title, self.width - 7), fg, bg)
+      if self.multi then
+        local box = todo.done and "[x] " or "[ ] "
+        self:fill(1, y, "  " .. box .. self:truncate(todo.title, self.width - 7), fg, bg)
+      else
+        self:fill(1, y, "  " .. self:truncate(todo.title, self.width - 4), fg, bg)
+      end
     end
   end
 end
@@ -343,6 +366,14 @@ function UI:drawStatus()
   if self.adding then
     msg = "New todo: " .. table.concat(self.buffer)
     fg = ACCENT_FG
+  elseif not msg then
+    if self.view == "details" then
+      msg = self.keyboard and "space completes, enter/esc back" or "use the buttons below"
+    elseif self.multi then
+      msg = "select mode: click a task to complete it"
+    else
+      msg = "click a task to open details"
+    end
   end
   self:fill(1, y, msg or "", fg, BG)
 end
@@ -358,18 +389,24 @@ function UI:drawHelp()
     self.buttons[#self.buttons + 1] = { x1 = x, x2 = x + #text - 1, action = action }
     x = x + #text + 2
   end
+  local function raw(text, action, fg)
+    self:fill(x, y, text, fg or ACCENT_FG, ACCENT_BG, #text)
+    self.buttons[#self.buttons + 1] = { x1 = x, x2 = x + #text - 1, action = action }
+    x = x + #text + 2
+  end
   if self.view == "details" then
     button("Back", "back")
-    button("Toggle", "toggle")
+    button("Complete", "toggle")
     button("Delete", "delete")
     button("Quit", "quit")
-    self:fill(x, y, "enter/esc back, space toggle", LINE_FG, BG)
+    if self.keyboard then
+      self:fill(x, y, "enter/esc back, space completes", LINE_FG, BG)
+    end
   else
     button("Add", "add")
-    button("Details", "details")
-    button("Delete", "delete")
+    button(self.multi and "Select:on" or "Select", "select")
     button("Quit", "quit")
-    self:fill(x, y, "click row toggles, wheel scrolls", LINE_FG, BG)
+    raw(self.showDone and "[x] Completed" or "[ ] Completed", "showdone")
   end
 
   local counts = self:counts()
@@ -400,13 +437,29 @@ function UI:setMessage(text, color)
 end
 
 function UI:currentId()
-  local todo = self.store:list()[self.selected]
+  local todo = self:visible()[self.selected]
   return todo and todo.id or nil
 end
 
 function UI:toggleSelected()
-  local todo = self.store:list()[self.selected]
+  if not self.multi then
+    self:setMessage("enable Select to complete tasks")
+    return
+  end
+  local todo = self:visible()[self.selected]
   if todo then self.store:setDone(todo.id, not todo.done) end
+end
+
+function UI:toggleMulti()
+  self.multi = not self.multi
+  self:setMessage(self.multi and "select mode on" or "select mode off", LINE_FG)
+end
+
+function UI:toggleShowDone()
+  self.showDone = not self.showDone
+  self.offset = 0
+  self.selected = 1
+  self:setMessage(self.showDone and "showing completed" or "hiding completed", LINE_FG)
 end
 
 function UI:deleteSelected()
@@ -455,7 +508,7 @@ function UI:commitAdd()
     return
   end
   self.store:add(title)
-  self.selected = #self.store:list()
+  self.selected = #self:visible()
   self:setMessage("added: " .. title, LINE_FG)
 end
 
@@ -496,6 +549,7 @@ function UI:handleDetailsKey(char, code)
 end
 
 function UI:handleKey(char, code)
+  if not self.keyboard then return end
   if self.adding then return self:handleAddKey(char, code) end
   if self.view == "details" then return self:handleDetailsKey(char, code) end
 
@@ -504,13 +558,17 @@ function UI:handleKey(char, code)
   elseif code == K.down or code == 208 then
     self.selected = self.selected + 1
   elseif code == K.space or code == 57 then
-    self:toggleSelected()
+    if self.multi then self:toggleSelected() else self:openDetails() end
   elseif code == K.enter or code == 28 then
     self:openDetails()
   elseif code == 0x1E or char == 97 then
     self:beginAdd()
   elseif code == 0x20 or char == 100 then
     self:deleteSelected()
+  elseif code == 0x32 or char == 109 then
+    self:toggleMulti()
+  elseif code == 0x2E or char == 99 then
+    self:toggleShowDone()
   elseif code == 0x10 or char == 113 or code == 1 then
     self.running = false
   end
@@ -523,8 +581,12 @@ function UI:invokeAction(action)
     self:openDetails()
   elseif action == "back" then
     self:closeDetails()
+  elseif action == "select" then
+    self:toggleMulti()
+  elseif action == "showdone" then
+    self:toggleShowDone()
   elseif action == "toggle" then
-    if self.view == "details" then self:toggleDetail() else self:toggleSelected() end
+    if self.view == "details" then self:toggleDetail() elseif self.multi then self:toggleSelected() end
   elseif action == "delete" then
     if self.view == "details" then self:deleteDetail() else self:deleteSelected() end
   elseif action == "quit" then
@@ -550,9 +612,13 @@ function UI:handleTouch(x, y, button)
   local top, bottom = self:sidebarTop(), self:sidebarBottom()
   if y >= top and y <= bottom then
     local idx = self.offset + (y - top + 1)
-    if self.store:list()[idx] then
+    if self:visible()[idx] then
       self.selected = idx
-      self:toggleSelected()
+      if self.multi then
+        self:toggleSelected()
+      else
+        self:openDetails()
+      end
     end
   end
 end
@@ -598,14 +664,15 @@ local function runSelfTest()
   local function key(c, code) return { "key_down", "keyboard", c or 0, code or 0, "player" } end
   local function touch(x, y) return { "touch", "screen", x, y, 0 } end
   local queue = {
-    touch(5, 3),                                   -- click first row: toggle done (open -> done)
-    { "scroll", "screen", 5, 3, -1 },              -- wheel down: select row 2
-    key(0, 28),                                    -- enter: open details for row 2
-    key(0, 57),                                    -- space: toggle it in the details view (done -> open)
-    key(0, 1),                                     -- esc: back to the list
+    touch(5, 3),                                   -- click row 1: open details (not toggle)
+    key(0, 57),                                    -- space in details: mark t1 complete
+    key(0, 1),                                     -- esc: back to the list (t1 now hidden)
+    key(109, 50),                                  -- m: enable select mode
+    key(0, 57),                                    -- space: complete the selected (t3)
     key(97, 30), key(78), key(101), key(119), key(32), key(116), -- a + "New t"
-    key(0, 28),                                    -- enter: commit add
-    touch(39, 24),                                 -- Quit button ([ Quit ] sits around x 36..43)
+    key(0, 28),                                    -- enter: commit add (t6)
+    key(99, 46),                                   -- c: show completed
+    key(113, 16),                                  -- q: quit
   }
   local function input()
     local item = table.remove(queue, 1)
@@ -614,17 +681,23 @@ local function runSelfTest()
   end
 
   local store = Store.new("memory")
-  local ui = UI.new(store, { input = input })
+  local ui = UI.new(store, { input = input, keyboard = true })
   ui:loop()
 
   local todos = store:list()
   local open = 0
   for _, t in ipairs(todos) do if not t.done then open = open + 1 end end
 
-  local ok = #todos == 6 and open == 4 and todos[1] and todos[1].done and todos[2] and not todos[2].done
+  local ok = #todos == 6 and open == 2
+    and todos[1] and todos[1].done
+    and todos[2] and todos[2].done
+    and todos[3] and todos[3].done
   print(ok and "PASS: todo self-test" or "SELF-TEST FAILED")
-  print(string.format("  total=%d open=%d firstDone=%s secondDone=%s",
-    #todos, open, tostring(todos[1] and todos[1].done), tostring(todos[2] and todos[2].done)))
+  print(string.format("  total=%d open=%d done={%s,%s,%s}",
+    #todos, open,
+    tostring(todos[1] and todos[1].done),
+    tostring(todos[2] and todos[2].done),
+    tostring(todos[3] and todos[3].done)))
   return ok
 end
 
