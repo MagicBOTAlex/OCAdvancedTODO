@@ -23,6 +23,3 @@ filesystems:
   - label: openos
     path: builtin
     mount: /
-  - label: app
-    path: .
-    mount: /app
